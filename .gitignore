@@ -1,0 +1,80 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+*venv/
+
+# Environment variables and secret files
+.env
+.env.*
+secret_key.json
+config.json
+
+# Log files
+*.log
+
+# SQLite database files (if used)
+*.sqlite3
+db.sqlite3
+*.db
+*.sqlite3-journal
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Editor folders and files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Byte-compiled / optimized / DLL files
+*.pyc
+*.pyo
+*.pyd
+
+# Testing files
+coverage/
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Backup files
+*~
+*.bak
+*.swp
+
+# Build / distribution
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Pipenv and Poetry
+Pipfile.lock
+poetry.lock
