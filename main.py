@@ -9,6 +9,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 
 try:
@@ -17,7 +20,7 @@ except ImportError:
     logging.error("vacancy_parser modulini topib bo'lmadi. Fayl shu papkadami yoki DEFAULT_ITEMS_PER_PAGE eksport qilinganmi?")
     exit(1)
 
-BOT_TOKEN = "7892017759:AAFICJrjmB2PN9G93LiNIiRsuBseDKRHujA" 
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://job.ubtuit.uz/api/v1/vacancies/"
 TATU_UF_WEBSITE_URL = "https://ubtuit.uz/" # TATU UF sayti manzili
 OBYEKTIVKA_FILE_PATH = "Obyektivka_namuna.docx" # Obyektivka faylining nomi (bot papkasida)
@@ -32,6 +35,8 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
 )
 
+# Bot obyekti yaratilganda default parse_mode o'rnatilmagan,
+# shuning uchun har bir .answer() chaqiruvida kerak bo'lsa ko'rsatish kerak.
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 vacancy_parser: VacancyParser | None = None
@@ -105,7 +110,6 @@ async def start_command(message: types.Message, state: FSMContext):
     user_name = html.escape(message.from_user.first_name)
     await message.answer(f"Salom {user_name}, TATU UF vakansiyalar Telegram Botiga xush kelibsiz!", reply_markup=keyboard)
 
-# --- Yangi tugmalar uchun handlerlar ---
 @dp.message(F.text == "TATU UF Asosiy sayti", StateFilter(None))
 async def handle_website_button(message: types.Message):
     logging.info(f"User {message.from_user.id} requested TATU UF website link.")
@@ -121,24 +125,31 @@ async def handle_obyektivka_button(message: types.Message):
     logging.info(f"User {message.from_user.id} requested obyektivka sample.")
     if os.path.exists(OBYEKTIVKA_FILE_PATH):
         try:
-            await message.answer_chat_action(types.ChatAction.UPLOAD_DOCUMENT) # Fayl yuklanayotganini bildirish
-            document = FSInputFile('', filename="Obyektivka_namuna.docx")
-            await message.answer_document('Obyektivka_namuna.docx', caption="Obyektivka (Ma'lumotnoma) namunasi.")
+            # Fayl yuklanayotganini bildirish
+            await message.answer_chat_action(action=types.ChatAction.UPLOAD_DOCUMENT)
+            # FSInputFile ob'ektini to'g'ri yo'l bilan yaratish
+            document_to_send = FSInputFile(path=OBYEKTIVKA_FILE_PATH, filename="Obyektivka_namuna.docx")
+            # FSInputFile ob'ektini yuborish
+            await message.answer_document(document_to_send, caption="Obyektivka (Ma'lumotnoma) namunasi.")
             logging.info(f"Obyektivka sample sent to user {message.from_user.id}")
+        except FileNotFoundError: # Agar fayl os.path.exists va FSInputFile orasida o'chib ketsa
+             logging.error(f"Obyektivka file '{OBYEKTIVKA_FILE_PATH}' not found during send operation for user {message.from_user.id}.")
+             await message.answer("📄 Kechirasiz, obyektivka fayli topilmadi (qayta urinish vaqtida). Iltimos, keyinroq qayta urinib ko'ring.")
+        except TelegramBadRequest as e:
+            logging.error(f"Telegram API error sending obyektivka to {message.from_user.id}: {e}", exc_info=True)
+            await message.answer("📄 Faylni yuborishda Telegram bilan bog'liq xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.")
         except Exception as e:
-            logging.error(f"Error sending obyektivka to {message.from_user.id}: {e}")
-            await message.answer("📄 Faylni yuborishda xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.")
+            logging.error(f"Error sending obyektivka to {message.from_user.id}: {e}", exc_info=True)
+            await message.answer("📄 Faylni yuborishda kutilmagan xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.")
     else:
-        logging.warning(f"Obyektivka file not found at {OBYEKTIVKA_FILE_PATH}")
+        logging.warning(f"Obyektivka file not found at {OBYEKTIVKA_FILE_PATH} for user {message.from_user.id}")
         await message.answer("📄 Kechirasiz, hozirda obyektivka namunasi mavjud emas. Iltimos, keyinroq qayta urinib ko'ring.")
 
-@dp.message(F.text == "Bot haqida ma'lumot", StateFilter(None))
+@dp.message(F.text == "Bot haqida malumot", StateFilter(None))
 async def handle_about_bot_button(message: types.Message):
     logging.info(f"User {message.from_user.id} requested bot info.")
 
-    # HTML teglarni minimal darajada ishlatamiz va matnni oldindan escape qilamiz
-    # Bu yerda @username ni haqiqiy username bilan almashtiring yoki olib tashlang
-    admin_contact = "@usman_niyazbekov" # Admin kontaktini o'zgartiring
+    admin_username = "usman_niyazbekov"  # Haqiqiy username (@ belgisisiz)
 
     bot_title = "TATU UF Vakansiyalar Boti"
     description = (
@@ -151,38 +162,45 @@ async def handle_about_bot_button(message: types.Message):
     feature2 = "Obyektivka namunasini yuklab olish"
     feature3 = "TATU UF rasmiy saytiga o'tish"
     data_source = "Bot job.ubtuit.uz sayti ma'lumotlaridan foydalanadi."
-    contact_info = f"Agar taklif yoki shikoyatlaringiz bo'lsa, {html.escape(admin_contact)} manziliga murojaat qilishingiz mumkin."
 
-    # Matnni yig'amiz
-    bot_info_text_parts = [
+    # Matn qismlarini ehtiyotkorlik bilan tuzamiz, faqat kontent matnini escape qilamiz
+    # va HTML teglarini teg sifatida saqlaymiz. @username HTML escape qilinmasligi kerak.
+    message_parts = [
         f"<b>🤖 {html.escape(bot_title)}</b>",
-        "", # Bo'sh qator
+        "",  # Yangi qator uchun
         html.escape(description),
-        "",
+        "",  # Yangi qator uchun
         f"<b>{html.escape(features_title)}</b>",
         f"✅ {html.escape(feature1)}",
         f"📄 {html.escape(feature2)}",
         f"🌐 {html.escape(feature3)}",
-        "",
+        "",  # Yangi qator uchun
         html.escape(data_source),
-        html.escape(contact_info)
+        # Kontakt qatori uchun @username escape qilinmasligini ta'minlaymiz,
+        # Telegram uni havola sifatida ko'rsatishi uchun.
+        # Username'lar HTML maxsus belgilarini o'z ichiga olmaydi, shuning uchun to'g'ridan-to'g'ri kiritish xavfsiz.
+        f"{html.escape('Agar taklif yoki shikoyatlaringiz bo‘lsa, @')}{admin_username}{html.escape(' manziliga murojaat qilishingiz mumkin.')}"
     ]
-    bot_info_text = "\n".join(bot_info_text_parts)
+    bot_info_text = "\n".join(message_parts)
 
     try:
-        # parse_mode="HTML" bot obyektini yaratishda global o'rnatilgan bo'lsa,
-        # bu yerda alohida ko'rsatish shart emas.
-        await message.answer(bot_info_text)
+        await message.answer(bot_info_text, parse_mode="HTML")
         logging.info(f"Bot info sent to user {message.from_user.id}")
+    except TelegramBadRequest as e:
+        # Telegram API xatolarini (masalan, HTML parse xatosi) batafsilroq loglash
+        logging.error(f"Telegram API error sending bot info to {message.from_user.id} (HTML parse error possible): {e}", exc_info=True)
+        await message.answer(
+            "Bot haqida ma'lumotni ko'rsatishda texnik xatolik yuz berdi (API). "
+            "Iltimos, keyinroq qayta urinib ko'ring."
+        )
     except Exception as e:
-        logging.error(f"Error sending bot info to {message.from_user.id}: {e}", exc_info=True)
-        # Xatolik yuz berganda foydalanuvchiga oddiy xabar yuborish
-        try:
-            await message.answer("Bot haqida ma'lumotni ko'rsatishda texnik xatolik yuz berdi. Iltimos, keyinroq qayta urinib ko'ring.")
-        except Exception as fallback_e:
-            logging.error(f"Error sending fallback bot info error message: {fallback_e}")
+        logging.error(f"Unexpected error sending bot info to {message.from_user.id}: {e}", exc_info=True)
+        # Umumiy xatolik yuz berganda foydalanuvchiga oddiy xabar yuborish
+        await message.answer(
+            "Bot haqida ma'lumotni ko'rsatishda kutilmagan texnik xatolik yuz berdi. "
+            "Iltimos, keyinroq qayta urinib ko'ring."
+        )
 
-# --- Vakansiya qidirish bilan bog'liq handlerlar ---
 @dp.message(F.text == "Vakansiyalarni qidirish", StateFilter(None))
 async def search_vacancies_handler(message: types.Message, state: FSMContext):
     global vacancy_parser
@@ -191,7 +209,7 @@ async def search_vacancies_handler(message: types.Message, state: FSMContext):
          await message.answer("Xatolik: Bot hali tayyor emas, birozdan so'ng urinib ko'ring.")
          return
 
-    await message.answer("⏳ Vakansiyalar qidirilmoqda...", reply_markup=skeyboard_active_search) # Vakansiya qidirishda "Ortga" tugmasi
+    await message.answer("⏳ Vakansiyalar qidirilmoqda...", reply_markup=skeyboard_active_search)
     current_page = 1
 
     try:
@@ -201,12 +219,12 @@ async def search_vacancies_handler(message: types.Message, state: FSMContext):
         )
 
         if vacancies_page_1 is None:
-            await message.answer("❌ Vakansiyalarni olishda xatolik yuz berdi. API bilan muammo bo'lishi mumkin.", reply_markup=create_start_keyboard()) # Bosh menyuga qaytarish uchun klaviatura
+            await message.answer("❌ Vakansiyalarni olishda xatolik yuz berdi. API bilan muammo bo'lishi mumkin.", reply_markup=create_start_keyboard())
             await state.clear()
             return
 
         if not vacancies_page_1:
-            await message.answer("Hozircha aktiv vakansiyalar mavjud emas.", reply_markup=create_start_keyboard()) # Bosh menyuga qaytarish uchun klaviatura
+            await message.answer("Hozircha aktiv vakansiyalar mavjud emas.", reply_markup=create_start_keyboard())
             await state.clear()
             return
 
@@ -231,7 +249,6 @@ async def search_vacancies_handler(message: types.Message, state: FSMContext):
         else:
              await message.answer("Vakansiyalarni ko'rsatishda kutilmagan muammo yuz berdi.", reply_markup=create_start_keyboard())
              await state.clear()
-
 
     except Exception as e:
         logging.exception("Vakansiyalarni qidirish handlerida kutilmagan xatolik!")
@@ -286,49 +303,58 @@ async def pagination_handler(query: types.CallbackQuery, state: FSMContext):
         if new_keyboard:
              await query.message.edit_text(message_text, reply_markup=new_keyboard)
         else:
+             # Bu holatda ham sahifa ma'lumotini ko'rsatish muhim
              empty_page_text = f"{message_text}\n\nBu sahifada boshqa vakansiya yo'q."
              builder = InlineKeyboardBuilder()
-             if target_page > 1:
+             if target_page > 1: # Faqatgina oldingi sahifa mavjud bo'lsa "Orqaga" tugmasini qo'shamiz
                  builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"page:{target_page - 1}"))
-             await query.message.edit_text(empty_page_text, reply_markup=builder.as_markup() if target_page > 1 else None)
+             # Agar "Orqaga" tugmasi bo'lsa yoki bo'lmasa ham, builder.as_markup() ni None bilan solishtirish kerak
+             reply_markup_to_send = builder.as_markup() if builder._markup else None # Agar builder bo'sh bo'lsa None
+             await query.message.edit_text(empty_page_text, reply_markup=reply_markup_to_send)
 
 
     except TelegramBadRequest as e:
         if "message to edit not found" in str(e).lower() or \
            "message is not modified" in str(e).lower():
             logging.warning(f"Could not edit message for pagination (likely already deleted or same content): {e}")
-            await query.answer("Xabar yangilanmadi (o'chirilgan yoki o'zgartirilmagan bo'lishi mumkin).", show_alert=False)
+            # Foydalanuvchiga javob bermaslik yaxshiroq, chunki xabar o'chirilgan yoki o'zgartirilmagan
+            await query.answer(show_alert=False) # Alertsiz javob, shunchaki so'rovni yopish
         else:
             logging.warning(f"Could not edit message for pagination (TelegramBadRequest): {e}")
             await query.answer("Xabar yangilanmadi (eskirgan bo'lishi mumkin).", show_alert=True)
     except Exception as e:
         logging.exception("Pagination handlerida kutilmagan xatolik!")
         try:
-            await query.message.edit_text("Sahifani o'zgartirishda texnik xatolik yuz berdi.")
-        except Exception:
+            # Xabarni o'zgartirishga urinib ko'ramiz, agar iloji bo'lmasa, alert bilan javob beramiz
+            if query.message:
+                 await query.message.edit_text("Sahifani o'zgartirishda texnik xatolik yuz berdi.")
+            else:
+                await query.answer("Sahifani o'zgartirishda xatolik.", show_alert=True)
+        except Exception: # edit_text ham xato bersa
             await query.answer("Sahifani o'zgartirishda xatolik.", show_alert=True)
-
 
 
 @dp.callback_query(SearchState.browsing, F.data.startswith("vacancy:"))
 async def vacancy_callback(query: types.CallbackQuery, state: FSMContext):
-    await query.answer()
+    await query.answer() # So'rovni tezda tasdiqlash
 
     try:
         relative_index = int(query.data.split(":")[1])
     except (IndexError, ValueError):
         logging.warning(f"Could not parse relative index from callback data: {query.data}")
-        await query.message.edit_text("Noto'g'ri ma'lumot. Qaytadan urinib ko'ring.", reply_markup=None)
+        if query.message: # Xabar mavjud bo'lsa o'zgartiramiz
+            await query.message.edit_text("Noto'g'ri ma'lumot. Qaytadan urinib ko'ring.", reply_markup=None)
         return
 
     data = await state.get_data()
     current_vacancies = data.get('current_vacancies')
     current_page = data.get('current_page', 1)
+    total_pages = data.get('total_pages', 1) # Ro'yxatga qaytish tugmasi uchun kerak
 
     if not current_vacancies or not isinstance(current_vacancies, list):
         logging.warning("Vacancies list not found or invalid in state for detail view.")
-        await query.message.edit_text("Vakansiyalar ro'yxati topilmadi (ma'lumot eskirgan bo'lishi mumkin). Qidiruvni qaytadan boshlang.", reply_markup=None)
-        # await state.clear() # Bu yerda clear qilish shartmas, "Ortga" bosilsa tozalaydi.
+        if query.message:
+            await query.message.edit_text("Vakansiyalar ro'yxati topilmadi (ma'lumot eskirgan bo'lishi mumkin). Qidiruvni qaytadan boshlang.", reply_markup=None)
         return
 
     if 0 <= relative_index < len(current_vacancies):
@@ -341,46 +367,53 @@ async def vacancy_callback(query: types.CallbackQuery, state: FSMContext):
             f"<b>Maosh:</b> {html.escape(vacancy.get('salary', '<i>Ko’rsatilmagan</i>'))}",
             f"<b>Talab qilinadigan tajriba:</b> {html.escape(vacancy.get('experience', '<i>Noma’lum</i>'))}",
             f"<b>Ish jadvali:</b> {html.escape(vacancy.get('work_schedule', '<i>Noma’lum</i>'))}",
-            f"<b>Talablar:</b> {html.escape(vacancy.get('requirement', '<i>Noma’lum</i>'))}",
+            f"<b>Talablar:</b> {html.escape(str(vacancy.get('requirement', '<i>Noma’lum</i>')))}", # str() qo'shildi, agar None bo'lsa
             f"<b>Ochilish vaqti:</b> {html.escape(vacancy.get('opening_time', '<i>Noma’lum</i>'))}",
             f"<b>Yopilish vaqti:</b> {html.escape(vacancy.get('end_time', '<i>Noma’lum</i>'))}",
-            f"<b>Ushbu vakansiyaga</b> <a href='https://job.ubtuit.uz/job/{vacancy.get('id')}'>ARIZA BERISH</a>",
         ]
+        vacancy_id = vacancy.get('id')
+        if vacancy_id:
+            details.append(f"<b>Ushbu vakansiyaga</b> <a href='https://job.ubtuit.uz/job/{vacancy_id}'>ARIZA BERISH</a>")
+        else:
+            details.append("<i>Ariza berish uchun havola topilmadi.</i>")
+
         message_text = "\n".join(filter(None, details))
 
         back_button_builder = InlineKeyboardBuilder()
+        # "Ro'yxatga qaytish" tugmasi joriy sahifaga qaytaradi
         back_button_builder.row(
             InlineKeyboardButton(text="⬅️ Ro'yxatga qaytish", callback_data=f"page:{current_page}")
         )
 
         try:
-            await query.message.edit_text(
-                message_text,
-                parse_mode="HTML",
-                reply_markup=back_button_builder.as_markup(),
-                disable_web_page_preview=True
-            )
+            if query.message:
+                await query.message.edit_text(
+                    message_text,
+                    parse_mode="HTML",
+                    reply_markup=back_button_builder.as_markup(),
+                    disable_web_page_preview=True
+                )
         except TelegramBadRequest as e:
              if "message to edit not found" in str(e).lower() or \
                 "message is not modified" in str(e).lower():
                  logging.warning(f"Could not edit message for vacancy detail (likely already deleted or same content): {e}")
-                 await query.answer("Xabarni yangilab bo'lmadi (o'chirilgan yoki o'zgartirilmagan).", show_alert=False)
+                 # Bu holda alert ko'rsatmaslik ma'qul
              else:
                  logging.warning(f"Could not edit message for vacancy detail (TelegramBadRequest): {e}")
-                 await query.answer("Xabarni yangilab bo'lmadi.", show_alert=True)
+                 await query.answer("Xabarni yangilab bo'lmadi.", show_alert=True) # Foydalanuvchiga xabar berish
         except Exception as edit_err:
              logging.error(f"Could not edit message for vacancy detail: {edit_err}")
              await query.answer("Xabarni ko'rsatishda xatolik.", show_alert=True)
 
-
     else:
         logging.warning(f"Invalid relative index requested: {relative_index}. List size: {len(current_vacancies)} on page {current_page}")
-        await query.message.edit_text("Tanlangan vakansiya joriy sahifada topilmadi (ro'yxat yangilangan bo'lishi mumkin). Qidiruvni qaytadan boshlang.", reply_markup=None)
+        if query.message:
+            await query.message.edit_text("Tanlangan vakansiya joriy sahifada topilmadi (ro'yxat yangilangan bo'lishi mumkin). Qidiruvni qaytadan boshlang.", reply_markup=None)
 
 
 async def main():
     global vacancy_parser
-    vacancy_parser = VacancyParser(API_URL)
+    vacancy_parser = VacancyParser(API_URL) # DEFAULT_ITEMS_PER_PAGE vacancy_parser ichida ishlatiladi
 
     logging.info("Bot ishga tushmoqda...")
     print("Bot is starting...")
@@ -394,6 +427,11 @@ async def main():
     except Exception as e:
         logging.error(f"Bot komandalarini o'rnatishda xatolik: {e}")
 
+    # Obyektivka fayli mavjudligini ishga tushirishdan oldin tekshirish
+    if not os.path.exists(OBYEKTIVKA_FILE_PATH):
+        logging.warning(f"DIQQAT: Obyektivka fayli '{OBYEKTIVKA_FILE_PATH}' topilmadi. Fayl yuklash funksiyasi ishlamasligi mumkin.")
+        print(f"WARNING: Obyektivka file '{OBYEKTIVKA_FILE_PATH}' not found. File upload feature might not work.")
+
     try:
         await dp.start_polling(bot)
     finally:
@@ -401,16 +439,11 @@ async def main():
         print("Bot is stopping...")
         await bot.session.close()
         if vacancy_parser:
-            await vacancy_parser.close()
+            await vacancy_parser.close() # Parser sessiyasini ham yopish
         logging.info("Bot to'xtatildi.")
         print("Bot stopped.")
 
 if __name__ == "__main__":
-    # Obyektivka fayli mavjudligini tekshirish (ixtiyoriy, ishga tushirishdan oldin)
-    if not os.path.exists(OBYEKTIVKA_FILE_PATH):
-        logging.warning(f"DIQQAT: Obyektivka fayli '{OBYEKTIVKA_FILE_PATH}' topilmadi. Fayl yuklash funksiyasi ishlamasligi mumkin.")
-        print(f"WARNING: Obyektivka file '{OBYEKTIVKA_FILE_PATH}' not found. File upload feature might not work.")
-
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
